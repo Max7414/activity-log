@@ -1,7 +1,7 @@
 name: CI Dev Deployment
 on:
   push:
-    branches: [ main ]
+    branches: [ master ]
 
 permissions:
   contents: write   # 建立 Release 需要 contents: write :contentReference[oaicite:6]{index=6}
