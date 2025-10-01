@@ -1,12 +1,12 @@
 name: CI/CD Deployment Pipeline
 on:
-  workflow_dispatch:            # 手動觸發，避免與 dev-deploy 衝突
-  # 若也想 push master 觸發整條線，取消以下註解：
+  workflow_dispatch:
+  # 如需 push master 也觸發整條線，可加：
   # push:
   #   branches: [ master ]
 
 permissions:
-  contents: write               # 建立/刪除 releases/tags 需要
+  contents: write
 
 jobs:
   build:
@@ -24,7 +24,17 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
-      - name: Install deps (auto-detect pm)
+      # ★ 執行本地 action（示範：跑一次即可）
+      - name: Run local activity-log action
+        if: matrix.node == 20
+        uses: ./
+        with:
+          GITHUB_USERNAME: ${{ github.repository_owner }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_LIMIT: 10
+          OUTPUT_STYLE: MARKDOWN
+
+      - name: Install deps (auto-detect)
         run: |
           corepack enable || true
           if [ -f pnpm-lock.yaml ]; then
@@ -47,7 +57,6 @@ jobs:
             npm test || true
           fi
 
-      # 動態版本（供 O 級加分用，可拿來組 TAG）
       - name: Compute base version
         id: ver
         run: |
@@ -55,8 +64,6 @@ jobs:
           if [ -f package.json ]; then
             VERSION=$(node -p "require('./package.json').version || '0.0.0'")
           else
-            # 如有 git tag 想沿用，可改為：
-            # VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0.0")
             :
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
@@ -101,7 +108,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           BASE: ${{ needs.build.outputs.version || '0.0.0' }}
-          TAG:  ${{ vars.BUILD_TAG }}       # staging 環境：staging-v1.0（或 staging-${BASE}）
+          TAG:  ${{ vars.BUILD_TAG }}       # Environment: staging → staging-v1.0 或 staging-${BASE}
           NOTE: ${{ vars.RELEASE_NOTE }}     # 例：Pre-production
         run: |
           if gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
@@ -118,7 +125,6 @@ jobs:
           TAG: ${{ vars.BUILD_TAG }}
         run: |
           if [ -n "$SLACK_WEBHOOK" ]; then
-            # jq 在 runner 上可用；若不想依賴 jq 可手寫 JSON
             curl -s -X POST -H 'Content-type: application/json' \
               --data "$(jq -nc --arg t "$TAG" --arg s "staging" '{text:"Deployed to \($s): \($t)"}')" \
               "$SLACK_WEBHOOK" || true
@@ -127,9 +133,9 @@ jobs:
   deploy-production:
     needs: deploy-staging
     runs-on: ubuntu-latest
-    environment: production       # 會觸發 Required reviewers 審核
+    environment: production       # 這裡會卡 Required reviewers
     steps:
-      - name: Download artifact again
+      - name: Download & Merge artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: build-*
@@ -154,7 +160,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          TAG:  ${{ vars.BUILD_TAG }}       # production 環境：prod-v1.0（或 prod-${BASE}）
+          TAG:  ${{ vars.BUILD_TAG }}       # Environment: production → prod-v1.0 或 prod-${BASE}
           NOTE: ${{ vars.RELEASE_NOTE }}     # 例：Production
         run: |
           if gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
@@ -177,7 +183,6 @@ jobs:
               "$SLACK_WEBHOOK" || true
           fi
 
-      # 失敗回滾（刪 Release + 刪 Tag）
       - name: Rollback on failure
         if: failure()
         env:
