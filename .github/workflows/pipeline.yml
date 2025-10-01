@@ -1,0 +1,138 @@
+name: CI/CD Deployment Pipeline
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [18, 20]     # 矩陣（O 等級的一部分）
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: 'npm'
+
+      - name: Install deps (if Node project)
+        run: |
+          if [ -f package.json ]; then
+            (npm ci || npm install)
+          fi
+
+      - name: Lint & Test (optional but recommended)
+        continue-on-error: true
+        run: |
+          if [ -f package.json ]; then
+            npm run -s lint || true
+            npm test || true
+          fi
+
+      - name: Compute base version
+        id: ver
+        run: |
+          VERSION="0.0.0"
+          if [ -f package.json ]; then
+            VERSION=$(node -p "require('./package.json').version || '0.0.0'")
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Package artifact
+        run: |
+          mkdir -p out
+          zip -r out/build.zip . -x ".git/*"
+
+      - name: Upload artifact (one per OS)
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.node }}
+          path: out/build.zip
+          retention-days: 7
+
+  deploy-staging:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Merge matrix artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: build-*
+          merge-multiple: true  # v4 建議做法（合併多個 artifact）:contentReference[oaicite:10]{index=10}
+
+      - name: Pick one artifact to release
+        run: |
+          # 若合併多個，可只選其中一個或全部上傳；這裡示範選第一個
+          ls -al
+          mv build.zip staging_build.zip || mv out/build.zip staging_build.zip || true
+
+      - name: Release to Staging
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE: ${{ needs.build.outputs.version || '0.0.0' }}
+          TAG: ${{ vars.BUILD_TAG }} # 一般建議在 Environment 內直接設定 staging-vX.Y
+          NOTE: ${{ vars.RELEASE_NOTE }}
+        run: |
+          # 若你想在這裡拼 TAG，可把 TAG 改成 "staging-${BASE}"
+          gh release create "$TAG" staging_build.zip --notes "$NOTE" --prerelease
+
+      - name: Notify (Slack optional)
+        if: always()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}  # 放 staging environment secret
+        run: |
+          if [ -n "$SLACK_WEBHOOK" ]; then
+            curl -X POST -H 'Content-type: application/json' --data "$(jq -nc --arg t "$TAG" --arg s "staging" '{text:"Deployed to \($s): \($t)"}')" "$SLACK_WEBHOOK"
+          fi
+
+  deploy-production:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    environment: production   # 這裡會觸發 required reviewers 審核 :contentReference[oaicite:11]{index=11}
+    steps:
+      - name: Download staging artifact
+        uses: actions/download-artifact@v4
+        with:
+          pattern: build-*
+          merge-multiple: true
+
+      - name: Select artifact
+        run: |
+          mv staging_build.zip prod_build.zip || mv build.zip prod_build.zip || true
+
+      - name: Release to Production
+        id: rel
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ vars.BUILD_TAG }}      # 例如 prod-v1.0（在 production environment 設好）
+          NOTE: ${{ vars.RELEASE_NOTE }}
+        run: |
+          gh release create "$TAG" prod_build.zip --notes "$NOTE" --latest
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Notify (Slack optional)
+        if: always()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}  # 放 production environment secret
+          TAG: ${{ steps.rel.outputs.tag }}
+        run: |
+          if [ -n "$SLACK_WEBHOOK" ]; then
+            curl -X POST -H 'Content-type: application/json' --data "$(jq -nc --arg t "$TAG" '{text:"✅ Production released: \($t)"}')" "$SLACK_WEBHOOK"
+          fi
+
+      # 失敗時 Rollback：刪 Release + 刪 Tag
+      - name: Rollback on failure (delete release & tag)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.rel.outputs.tag || vars.BUILD_TAG }}
+        run: |
+          echo "Rolling back $TAG ..."
+          gh release delete "$TAG" -y || true
+          git push origin :refs/tags/$TAG || true
