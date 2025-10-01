@@ -1,0 +1,56 @@
+name: CI Dev Deployment
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write   # 建立 Release 需要 contents: write :contentReference[oaicite:6]{index=6}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Node 專案（若存在才安裝/建置；避免沒 package.json 時出錯）
+      - name: Install & Build (if Node project)
+        run: |
+          if [ -f package.json ]; then
+            corepack enable || true
+            # 盡量用 ci；沒有 lock 就退回 install
+            (npm ci || npm install)
+            npm run -s build || true
+          fi
+
+      - name: Package artifact
+        run: |
+          zip -r build.zip . -x ".git/*"
+      
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifact
+          path: build.zip
+          retention-days: 7
+      # v4 artifacts 說明與例子
+      # 參考 actions/upload-artifact 以及 v4 文件與部落格公告 :contentReference[oaicite:7]{index=7}
+
+  deploy-dev:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - name: Download Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifact
+
+      - name: Release Dev Build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # gh CLI 預設會讀 GH_TOKEN/GITHUB_TOKEN
+          TAG: ${{ vars.BUILD_TAG }}
+          NOTE: ${{ vars.RELEASE_NOTE }}
+        run: |
+          gh release create "$TAG" build.zip --notes "$NOTE" --latest=false
+          # gh release create 說明：可附檔與 notes :contentReference[oaicite:8]{index=8}
