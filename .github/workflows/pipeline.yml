@@ -1,12 +1,12 @@
 name: CI/CD Deployment Pipeline
 on:
-  workflow_dispatch:
-  # 如需 push master 也觸發整條線，可加：
+  workflow_dispatch:            # 手動觸發，純 pipeline
+  # 如果也想 push master 觸發整條線，取消註解：
   # push:
   #   branches: [ master ]
 
 permissions:
-  contents: write
+  contents: write               # 建立/刪除 releases/tags 需要
 
 jobs:
   build:
@@ -24,15 +24,7 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
-      # ★ 執行本地 action（示範：跑一次即可）
-      - name: Run local activity-log action
-        if: matrix.node == 20
-        uses: ./
-        with:
-          GITHUB_USERNAME: ${{ github.repository_owner }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EVENT_LIMIT: 10
-          OUTPUT_STYLE: MARKDOWN
+      # （★ 已移除 activity-log 這個本地 action 的步驟，避免呼叫 /user/starred）
 
       - name: Install deps (auto-detect)
         run: |
@@ -57,14 +49,12 @@ jobs:
             npm test || true
           fi
 
-      - name: Compute base version
+      - name: Compute base version (for dynamic tags if needed)
         id: ver
         run: |
           VERSION="0.0.0"
           if [ -f package.json ]; then
             VERSION=$(node -p "require('./package.json').version || '0.0.0'")
-          else
-            :
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
@@ -108,8 +98,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           BASE: ${{ needs.build.outputs.version || '0.0.0' }}
-          TAG:  ${{ vars.BUILD_TAG }}       # Environment: staging → staging-v1.0 或 staging-${BASE}
-          NOTE: ${{ vars.RELEASE_NOTE }}     # 例：Pre-production
+          TAG:  ${{ vars.BUILD_TAG }}        # staging 環境：staging-v1.0（或 staging-${BASE}）
+          NOTE: ${{ vars.RELEASE_NOTE }}      # 例：Pre-production
         run: |
           if gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
             gh release upload "$TAG" staging_build.zip --clobber --repo "$REPO"
@@ -118,22 +108,10 @@ jobs:
             gh release create "$TAG" staging_build.zip --notes "$NOTE" --prerelease --repo "$REPO"
           fi
 
-      - name: Notify (Slack optional)
-        if: always()
-        env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}   # staging environment secret（可不設）
-          TAG: ${{ vars.BUILD_TAG }}
-        run: |
-          if [ -n "$SLACK_WEBHOOK" ]; then
-            curl -s -X POST -H 'Content-type: application/json' \
-              --data "$(jq -nc --arg t "$TAG" --arg s "staging" '{text:"Deployed to \($s): \($t)"}')" \
-              "$SLACK_WEBHOOK" || true
-          fi
-
   deploy-production:
     needs: deploy-staging
     runs-on: ubuntu-latest
-    environment: production       # 這裡會卡 Required reviewers
+    environment: production        # 這裡會卡 Required reviewers（請在 Environment 設定）
     steps:
       - name: Download & Merge artifacts
         uses: actions/download-artifact@v4
@@ -160,8 +138,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          TAG:  ${{ vars.BUILD_TAG }}       # Environment: production → prod-v1.0 或 prod-${BASE}
-          NOTE: ${{ vars.RELEASE_NOTE }}     # 例：Production
+          TAG:  ${{ vars.BUILD_TAG }}        # production 環境：prod-v1.0（或 prod-${{ needs.build.outputs.version }})
+          NOTE: ${{ vars.RELEASE_NOTE }}      # 例：Production
         run: |
           if gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
             gh release upload "$TAG" prod_build.zip --clobber --repo "$REPO"
@@ -170,18 +148,6 @@ jobs:
             gh release create "$TAG" prod_build.zip --notes "$NOTE" --latest --repo "$REPO"
           fi
           echo "tag=$TAG" >> $GITHUB_OUTPUT
-
-      - name: Notify (Slack optional)
-        if: always()
-        env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}   # production environment secret（可不設）
-          TAG: ${{ steps.rel.outputs.tag }}
-        run: |
-          if [ -n "$SLACK_WEBHOOK" ]; then
-            curl -s -X POST -H 'Content-type: application/json' \
-              --data "$(jq -nc --arg t "$TAG" '{text:"✅ Production released: \($t)"}')" \
-              "$SLACK_WEBHOOK" || true
-          fi
 
       - name: Rollback on failure
         if: failure()
