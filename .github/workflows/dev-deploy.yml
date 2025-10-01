@@ -1,10 +1,10 @@
 name: CI Dev Deployment
 on:
   push:
-    branches: [ master ]
+    branches: [ master ]       # 你的預設分支
 
 permissions:
-  contents: write
+  contents: write              # 建立/編輯 Release 需要
 
 jobs:
   build:
@@ -18,14 +18,7 @@ jobs:
         with:
           node-version: 20
 
-      # ★ 執行本地 action（正確：uses + with）
-      - name: Run local activity-log action
-        uses: ./
-        with:
-          GITHUB_USERNAME: ${{ github.repository_owner }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EVENT_LIMIT: 10
-          OUTPUT_STYLE: MARKDOWN
+      # （★ 已移除執行本地 activity-log action 的步驟，避免呼叫 /user/starred）
 
       - name: Install & Build (Node project if present)
         run: |
@@ -62,10 +55,10 @@ jobs:
 
       - name: Create or Update Dev Release (idempotent)
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          TAG:  ${{ vars.BUILD_TAG }}     # 在 Environment: dev 設 dev-v1.0
-          NOTE: ${{ vars.RELEASE_NOTE }}  # 例：Dev preview
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # gh 可讀 GH_TOKEN/GITHUB_TOKEN
+          REPO: ${{ github.repository }}          # e.g. user/repo
+          TAG:  ${{ vars.BUILD_TAG }}             # 在 Environment: dev 設定，例如 dev-v1.0
+          NOTE: ${{ vars.RELEASE_NOTE }}          # 例：Dev preview
         run: |
           set -e
           ls -al
