@@ -1,10 +1,10 @@
 name: CI Dev Deployment
 on:
   push:
-    branches: [ master ]       # 你的預設分支是 master
+    branches: [ master ]
 
 permissions:
-  contents: write              # 發 Release 需要
+  contents: write
 
 jobs:
   build:
@@ -13,12 +13,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 若是 Node 專案就安裝與建置；不是也不會失敗
+      - name: Setup Node (no cache)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # ★ 執行本地 action（正確：uses + with）
+      - name: Run local activity-log action
+        uses: ./
+        with:
+          GITHUB_USERNAME: ${{ github.repository_owner }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_LIMIT: 10
+          OUTPUT_STYLE: MARKDOWN
+
       - name: Install & Build (Node project if present)
         run: |
           if [ -f package.json ]; then
             corepack enable || true
-            (npm ci || npm install)
+            if [ -f package-lock.json ]; then
+              npm ci
+            else
+              npm install
+            fi
             npm run -s build || true
           fi
 
@@ -43,12 +60,20 @@ jobs:
         with:
           name: build-artifact
 
-      - name: Release Dev Build
+      - name: Create or Update Dev Release (idempotent)
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}     # gh 會自動讀 GH_TOKEN/GITHUB_TOKEN
-          TAG: ${{ vars.BUILD_TAG }}                # 例：dev-v1.0（在 environment: dev 設定）
-          NOTE: ${{ vars.RELEASE_NOTE }}            # 例：Dev preview
-          REPO: ${{ github.repository }}            # e.g. user/repo
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG:  ${{ vars.BUILD_TAG }}     # 在 Environment: dev 設 dev-v1.0
+          NOTE: ${{ vars.RELEASE_NOTE }}  # 例：Dev preview
         run: |
+          set -e
           ls -al
-          gh release create "$TAG" build.zip --notes "$NOTE" --latest=false --repo "$REPO"
+          if gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
+            echo "Release $TAG exists. Uploading asset and updating notes..."
+            gh release upload "$TAG" build.zip --clobber --repo "$REPO"
+            gh release edit "$TAG" --notes "$NOTE" --repo "$REPO"
+          else
+            echo "Release $TAG not found. Creating..."
+            gh release create "$TAG" build.zip --notes "$NOTE" --latest=false --repo "$REPO"
+          fi
