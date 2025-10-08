@@ -17,7 +17,7 @@ const upperSuite = suite.toUpperCase();
 const coverageRequested =
   restArgs.includes('--coverage') || process.env.GENERATE_COVERAGE === '1';
 
-const forceFlag = 1;
+const forceFlag = 0;
 
 let shouldFail;
 if (forceFlag === '1') {
