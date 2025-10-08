@@ -17,15 +17,24 @@ const upperSuite = suite.toUpperCase();
 const coverageRequested =
   restArgs.includes('--coverage') || process.env.GENERATE_COVERAGE === '1';
 
-const forceFlag = '0';
+const forceFlag = process.env.FORCE_FAIL;
+const failProbability =
+  process.env.FAIL_PROBABILITY !== undefined
+    ? Number(process.env.FAIL_PROBABILITY)
+    : 0.3;
 
 let shouldFail;
 if (forceFlag === '1') {
   shouldFail = true;
 } else if (forceFlag === '0') {
   shouldFail = false;
+} else {
+  shouldFail = Math.random() < failProbability;
+}
 
-console.log(`[${upperSuite}] Running mock tests in ${process.env.TEST_ENV || 'local'} mode...`);
+console.log(
+  `[${upperSuite}] Running mock tests in ${process.env.TEST_ENV || 'local'} mode...`
+);
 
 if (shouldFail) {
   console.error(`[${upperSuite}] ❌ Mock tests failed`);
