@@ -17,7 +17,7 @@ const upperSuite = suite.toUpperCase();
 const coverageRequested =
   restArgs.includes('--coverage') || process.env.GENERATE_COVERAGE === '1';
 
-const forceFlag = process.env.FORCE_FAIL;
+const forceFlag = 1;
 const failProbability =
   process.env.FAIL_PROBABILITY !== undefined
     ? Number(process.env.FAIL_PROBABILITY)
