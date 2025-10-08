@@ -1,10 +1,74 @@
 // ci/mock-test.js
-// 用法：FORCE_FAIL=1 npm test -> 強制失敗（方便截圖）
-// 未設定時：30% 機率失敗，70% 成功（示範用）
-const fail = process.env.FORCE_FAIL === '1' ? true : Math.random() < 0.3;
-console.log('Running mock tests...');
-if (fail) {
-  console.error('❌ Mock tests failed');
+// Mock test runner used by the GitHub Actions pipeline.
+// Usage examples:
+//   node ./ci/mock-test.js unit
+//   FORCE_FAIL=1 node ./ci/mock-test.js integration --coverage
+
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+const [suiteArg, ...restArgs] = process.argv.slice(2);
+const suite = suiteArg || process.env.TEST_SUITE || 'default';
+const upperSuite = suite.toUpperCase();
+
+const coverageRequested =
+  restArgs.includes('--coverage') || process.env.GENERATE_COVERAGE === '1';
+
+const forceFlag = process.env.FORCE_FAIL;
+const failProbability =
+  process.env.FAIL_PROBABILITY !== undefined
+    ? Number(process.env.FAIL_PROBABILITY)
+    : 0.3;
+
+let shouldFail;
+if (forceFlag === '1') {
+  shouldFail = true;
+} else if (forceFlag === '0') {
+  shouldFail = false;
+} else {
+  shouldFail = Math.random() < failProbability;
+}
+
+console.log(`[${upperSuite}] Running mock tests in ${process.env.TEST_ENV || 'local'} mode...`);
+
+if (shouldFail) {
+  console.error(`[${upperSuite}] ❌ Mock tests failed`);
   process.exit(1);
 }
-console.log('✅ Mock tests passed');
+
+console.log(`[${upperSuite}] ✅ Mock tests passed`);
+
+if (coverageRequested) {
+  const coverageDir = resolve(__dirname, '../coverage');
+  mkdirSync(coverageDir, { recursive: true });
+
+  const coverageValue =
+    process.env.COVERAGE_PERCENT !== undefined
+      ? Number(process.env.COVERAGE_PERCENT)
+      : 92;
+
+  const summary = {
+    suite,
+    coverage: coverageValue,
+    generatedAt: new Date().toISOString(),
+  };
+
+  writeFileSync(
+    resolve(coverageDir, 'summary.json'),
+    JSON.stringify(summary, null, 2),
+    'utf8'
+  );
+
+  writeFileSync(
+    resolve(coverageDir, 'summary.txt'),
+    `Suite: ${suite}\nCoverage: ${coverageValue}%\nGenerated: ${summary.generatedAt}\n`,
+    'utf8'
+  );
+
+  console.log(
+    `[${upperSuite}] 📊 Coverage summary written (coverage=${coverageValue}%)`
+  );
+}

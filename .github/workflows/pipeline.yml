@@ -1,12 +1,12 @@
 name: CI/CD Deployment Pipeline
+
 on:
-  workflow_dispatch:            # 手動觸發，純 pipeline
-  # 如果也想 push master 觸發整條線，取消註解：
+  workflow_dispatch: # 手動觸發，純 pipeline
   # push:
   #   branches: [ master ]
 
 permissions:
-  contents: write               # 建立/刪除 releases/tags 需要
+  contents: write # 建立/刪除 releases/tags 需要
 
 jobs:
   build:
@@ -15,6 +15,8 @@ jobs:
       fail-fast: false
       matrix:
         node: [18, 20]
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,8 +25,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-
-      # （★ 已移除 activity-log 這個本地 action 的步驟，避免呼叫 /user/starred）
 
       - name: Install deps (auto-detect)
         run: |
@@ -41,12 +41,10 @@ jobs:
             fi
           fi
 
-      - name: Lint & Test (optional)
-        continue-on-error: true
+      - name: Build
         run: |
           if [ -f package.json ]; then
-            npm run -s lint || true
-            npm test || true
+            npm run -s build
           fi
 
       - name: Compute base version (for dynamic tags if needed)
@@ -70,8 +68,149 @@ jobs:
           path: out/build.zip
           retention-days: 7
 
-  deploy-staging:
+  test-unit:
     needs: build
+    runs-on: ubuntu-latest
+    env:
+      TEST_ENV: unit
+      FORCE_FAIL: 0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: |
+          corepack enable || true
+          if [ -f pnpm-lock.yaml ]; then
+            pnpm i --frozen-lockfile || pnpm i
+          elif [ -f yarn.lock ]; then
+            yarn install --frozen-lockfile || yarn install
+          elif [ -f package.json ]; then
+            if [ -f package-lock.json ]; then
+              npm ci
+            else
+              npm install
+            fi
+          fi
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: build-*
+          merge-multiple: true
+
+      - name: Run unit tests
+        run: npm run test:unit
+
+  test-integration:
+    needs: test-unit
+    runs-on: ubuntu-latest
+    env:
+      TEST_ENV: staging
+      FORCE_FAIL: 0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: |
+          corepack enable || true
+          if [ -f pnpm-lock.yaml ]; then
+            pnpm i --frozen-lockfile || pnpm i
+          elif [ -f yarn.lock ]; then
+            yarn install --frozen-lockfile || yarn install
+          elif [ -f package.json ]; then
+            if [ -f package-lock.json ]; then
+              npm ci
+            else
+              npm install
+            fi
+          fi
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: build-*
+          merge-multiple: true
+
+      - name: Run integration tests
+        run: npm run test:integration
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-summary
+          path: coverage
+          retention-days: 7
+          if-no-files-found: error
+
+  coverage:
+    needs: test-integration
+    runs-on: ubuntu-latest
+    outputs:
+      coverage: ${{ steps.report.outputs.coverage }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: |
+          corepack enable || true
+          if [ -f pnpm-lock.yaml ]; then
+            pnpm i --frozen-lockfile || pnpm i
+          elif [ -f yarn.lock ]; then
+            yarn install --frozen-lockfile || yarn install
+          elif [ -f package.json ]; then
+            if [ -f package-lock.json ]; then
+              npm ci
+            else
+              npm install
+            fi
+          fi
+
+      - name: Download coverage artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-summary
+          path: coverage
+
+      - name: Check coverage threshold
+        env:
+          MIN_COVERAGE: ${{ vars.MIN_COVERAGE || '85' }}
+        run: npm run coverage:check
+
+      - name: Record coverage output
+        id: report
+        run: |
+          COVERAGE=$(node -e "const fs = require('fs'); const data = JSON.parse(fs.readFileSync('coverage/summary.json', 'utf8')); process.stdout.write(String(data.coverage || 0));")
+          echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
+
+      - name: Upload coverage status
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-status
+          path: coverage/status.txt
+          retention-days: 7
+
+  deploy-staging:
+    needs:
+      - build
+      - coverage
     runs-on: ubuntu-latest
     environment: staging
     steps:
@@ -97,21 +236,32 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          BASE: ${{ needs.build.outputs.version || '0.0.0' }}
-          TAG:  ${{ vars.BUILD_TAG }}        # staging 環境：staging-v1.0（或 staging-${BASE}）
-          NOTE: ${{ vars.RELEASE_NOTE }}      # 例：Pre-production
+          COVERAGE: ${{ needs.coverage.outputs.coverage }}
+          TAG: ${{ vars.BUILD_TAG }}
+          NOTE: ${{ vars.RELEASE_NOTE }}
+          VERSION: ${{ needs.build.outputs.version || '0.0.0' }}
         run: |
+          NOTES_FILE=notes.txt
+          {
+            echo "${NOTE}"
+            echo ""
+            echo "Build version: ${VERSION}"
+            echo "Coverage: ${COVERAGE:-N/A}%"
+          } > "$NOTES_FILE"
           if gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
             gh release upload "$TAG" staging_build.zip --clobber --repo "$REPO"
-            gh release edit "$TAG" --notes "$NOTE" --prerelease --repo "$REPO"
+            gh release edit "$TAG" --notes-file "$NOTES_FILE" --prerelease --repo "$REPO"
           else
-            gh release create "$TAG" staging_build.zip --notes "$NOTE" --prerelease --repo "$REPO"
+            gh release create "$TAG" staging_build.zip --notes-file "$NOTES_FILE" --prerelease --repo "$REPO"
           fi
 
   deploy-production:
-    needs: deploy-staging
+    needs:
+      - build
+      - coverage
+      - deploy-staging
     runs-on: ubuntu-latest
-    environment: production        # 這裡會卡 Required reviewers（請在 Environment 設定）
+    environment: production # 這裡會卡 Required reviewers（請在 Environment 設定）
     steps:
       - name: Download & Merge artifacts
         uses: actions/download-artifact@v4
@@ -138,14 +288,23 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          TAG:  ${{ vars.BUILD_TAG }}        # production 環境：prod-v1.0（或 prod-${{ needs.build.outputs.version }})
-          NOTE: ${{ vars.RELEASE_NOTE }}      # 例：Production
+          TAG: ${{ vars.BUILD_TAG }}
+          NOTE: ${{ vars.RELEASE_NOTE }}
+          COVERAGE: ${{ needs.coverage.outputs.coverage }}
+          VERSION: ${{ needs.build.outputs.version || '0.0.0' }}
         run: |
+          NOTES_FILE=notes.txt
+          {
+            echo "${NOTE}"
+            echo ""
+            echo "Build version: ${VERSION}"
+            echo "Coverage: ${COVERAGE:-N/A}%"
+          } > "$NOTES_FILE"
           if gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
             gh release upload "$TAG" prod_build.zip --clobber --repo "$REPO"
-            gh release edit "$TAG" --notes "$NOTE" --latest --repo "$REPO"
+            gh release edit "$TAG" --notes-file "$NOTES_FILE" --latest --repo "$REPO"
           else
-            gh release create "$TAG" prod_build.zip --notes "$NOTE" --latest --repo "$REPO"
+            gh release create "$TAG" prod_build.zip --notes-file "$NOTES_FILE" --latest --repo "$REPO"
           fi
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 

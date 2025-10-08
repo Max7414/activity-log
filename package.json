@@ -5,10 +5,10 @@
   "scripts": {
     "build": "npm run build:mock",
     "build:mock": "mkdir -p dist && echo 'hello' > dist/app.txt",
-    "test": "node ./ci/mock-test.js",
-    "test:unit": "node ./ci/mock-test.js",
-    "test:integration": "node ./ci/mock-test.js",
-    "test:ci": "node ./ci/mock-test.js",
+    "test": "npm run test:unit && npm run test:integration",
+    "test:unit": "node ./ci/mock-test.js unit",
+    "test:integration": "node ./ci/mock-test.js integration --coverage",
+    "test:ci": "npm run test && npm run coverage:check",
     "coverage:check": "node ./ci/check-coverage.js"
   },
   "devDependencies": {}
