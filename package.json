@@ -1,13 +1,15 @@
 {
-	"dependencies": {
-		"@actions/core": "^1.11.1",
-		"@actions/github": "^6.0.1",
-		"axios": "^1.11.0"
-	},
-	"scripts": {
-		"build": "bun i && ncc build src/index.js --license licenses.txt"
-	},
-	"devDependencies": {
-		"@vercel/ncc": "^0.38.3"
-	}
+  "name": "apptest",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "npm run build:mock",
+    "build:mock": "mkdir -p dist && echo 'hello' > dist/app.txt",
+    "test": "node ./ci/mock-test.js",
+    "test:unit": "node ./ci/mock-test.js",
+    "test:integration": "node ./ci/mock-test.js",
+    "test:ci": "node ./ci/mock-test.js",
+    "coverage:check": "node ./ci/check-coverage.js"
+  },
+  "devDependencies": {}
 }
